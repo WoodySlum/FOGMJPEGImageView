@@ -125,4 +125,13 @@
     });
 }
 
+- (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential))completionHandler {
+    
+    //Creates credentials for logged in user (username/pass)
+    NSURLCredential *cred = [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust];
+    
+    completionHandler(NSURLSessionAuthChallengeUseCredential, cred);
+    
+}
+
 @end
