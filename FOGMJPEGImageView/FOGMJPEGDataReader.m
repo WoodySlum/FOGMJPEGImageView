@@ -34,6 +34,8 @@
 
 @property (nonatomic, strong, readwrite) NSMutableData *receivedData;
 
+@property (nonatomic) BOOL isReceivingData;
+
 @end
 
 @implementation FOGMJPEGDataReader
@@ -48,10 +50,10 @@
     }
     
     NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
-
+    
     self.processingQueue = [[NSOperationQueue alloc] init];
     self.URLSession = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:self.processingQueue];
-                             
+    
     return self;
 }
 
@@ -60,7 +62,7 @@
 - (void)startReadingFromURL:(NSURL *)URL
 {
     self.receivedData = [[NSMutableData alloc] init];
-    
+    self.isReceivingData = NO;
     NSURLRequest *request = [NSURLRequest requestWithURL:URL];
     self.dataTask = [self.URLSession dataTaskWithRequest:request];
     [self.dataTask resume];
@@ -76,41 +78,48 @@
 
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data
 {
-    [self.receivedData appendData:data];
-    
-    // if we don't have an end marker then we can continue
-    NSRange endMarkerRange = [self.receivedData rangeOfData:[FOGJPEGImageMarker JPEGEndMarker]
-                                                    options:0
-                                                      range:NSMakeRange(0, [self.receivedData length])];
-    if ( endMarkerRange.location == NSNotFound ) {
-        return;
+    if (!self.isReceivingData) {
+        self.isReceivingData = YES;
+        
+        [self.receivedData appendData:data];
+        
+        // if we don't have an end marker then we can continue
+        NSRange endMarkerRange = [self.receivedData rangeOfData:[FOGJPEGImageMarker JPEGEndMarker]
+                                                        options:0
+                                                          range:NSMakeRange(0, [self.receivedData length])];
+        if ( endMarkerRange.location == NSNotFound ) {
+            self.isReceivingData = NO;
+            return;
+        }
+        
+        // if we don't have a start marker prior to the end marker discard bytes and continue
+        NSRange startMarkerRange = [self.receivedData rangeOfData:[FOGJPEGImageMarker JPEGStartMarker]
+                                                          options:0
+                                                            range:NSMakeRange(0, endMarkerRange.location)];
+        if ( startMarkerRange.location == NSNotFound ) {
+            // todo: should trim receivedData to endMarkerRange.location + 2 until end
+            self.isReceivingData = NO;
+            return;
+        }
+        
+        NSUInteger imageDataLength = (endMarkerRange.location + 2) - startMarkerRange.location;
+        NSRange imageDataRange = NSMakeRange(startMarkerRange.location, imageDataLength);
+        NSData *imageData = [self.receivedData subdataWithRange:imageDataRange];
+        UIImage *image = [UIImage imageWithData:imageData scale:0.5];
+        
+        if ( image ) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong id<FOGMJPEGDataReaderDelegate> strongDelegate = self.delegate;
+                [strongDelegate FOGMJPEGDataReader:self receivedImage:image];
+            });
+        }
+        
+        NSUInteger newStartLocation = endMarkerRange.location + 2;
+        NSUInteger newDataLength = [self.receivedData length] - newStartLocation;
+        NSData *unusedData = [self.receivedData subdataWithRange:NSMakeRange(newStartLocation, newDataLength)];
+        self.receivedData = [NSMutableData dataWithData:unusedData];
+        self.isReceivingData = NO;
     }
-    
-    // if we don't have a start marker prior to the end marker discard bytes and continue
-    NSRange startMarkerRange = [self.receivedData rangeOfData:[FOGJPEGImageMarker JPEGStartMarker]
-                                                      options:0
-                                                        range:NSMakeRange(0, endMarkerRange.location)];
-    if ( startMarkerRange.location == NSNotFound ) {
-        // todo: should trim receivedData to endMarkerRange.location + 2 until end
-        return;
-    }
-    
-    NSUInteger imageDataLength = (endMarkerRange.location + 2) - startMarkerRange.location;
-    NSRange imageDataRange = NSMakeRange(startMarkerRange.location, imageDataLength);
-    NSData *imageData = [self.receivedData subdataWithRange:imageDataRange];
-    UIImage *image = [UIImage imageWithData:imageData scale:0.5];
-    
-    if ( image ) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            __strong id<FOGMJPEGDataReaderDelegate> strongDelegate = self.delegate;
-            [strongDelegate FOGMJPEGDataReader:self receivedImage:image];
-        });
-    }
-    
-    NSUInteger newStartLocation = endMarkerRange.location + 2;
-    NSUInteger newDataLength = [self.receivedData length] - newStartLocation;
-    NSData *unusedData = [self.receivedData subdataWithRange:NSMakeRange(newStartLocation, newDataLength)];
-    self.receivedData = [NSMutableData dataWithData:unusedData];
 }
 
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error
