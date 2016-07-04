@@ -34,8 +34,6 @@
 
 @property (nonatomic, strong, readwrite) NSMutableData *receivedData;
 
-@property (nonatomic) BOOL isReceivingData;
-
 @end
 
 @implementation FOGMJPEGDataReader
@@ -62,7 +60,6 @@
 - (void)startReadingFromURL:(NSURL *)URL
 {
     self.receivedData = [[NSMutableData alloc] init];
-    self.isReceivingData = NO;
     NSURLRequest *request = [NSURLRequest requestWithURL:URL];
     self.dataTask = [self.URLSession dataTaskWithRequest:request];
     [self.dataTask resume];
@@ -78,8 +75,7 @@
 
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data
 {
-    if (!self.isReceivingData) {
-        self.isReceivingData = YES;
+    @synchronized (self.receivedData) {
         
         [self.receivedData appendData:data];
         
@@ -88,7 +84,6 @@
                                                         options:0
                                                           range:NSMakeRange(0, [self.receivedData length])];
         if ( endMarkerRange.location == NSNotFound ) {
-            self.isReceivingData = NO;
             return;
         }
         
@@ -98,7 +93,6 @@
                                                             range:NSMakeRange(0, endMarkerRange.location)];
         if ( startMarkerRange.location == NSNotFound ) {
             // todo: should trim receivedData to endMarkerRange.location + 2 until end
-            self.isReceivingData = NO;
             return;
         }
         
@@ -118,8 +112,8 @@
         NSUInteger newDataLength = [self.receivedData length] - newStartLocation;
         NSData *unusedData = [self.receivedData subdataWithRange:NSMakeRange(newStartLocation, newDataLength)];
         self.receivedData = [NSMutableData dataWithData:unusedData];
-        self.isReceivingData = NO;
     }
+    
 }
 
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error
